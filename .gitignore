@@ -1,0 +1,13 @@
+ __pycache__/
+  *.py[cod]
+  *.zip
+  .DS_Store
+  .venv/
+  venv/
+  *.egg-info/
+  .idea/
+  .vscode/
+  packaged-*.yaml
+  samconfig.toml
+  scan-*.json
+  *-slingshot.json

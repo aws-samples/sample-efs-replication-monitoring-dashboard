@@ -1,0 +1,263 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EFS DR Readiness CloudWatch Dashboard — Deploy in the source region only.
+  Displays replication health, file validation, backup status, and IO activity
+  across both source and destination regions.
+
+Parameters:
+  SourceFileSystemId:
+    Type: String
+    Description: Source EFS filesystem ID (e.g., fs-0abc1234def56789a)
+    AllowedPattern: 'fs-[0-9a-f]+'
+
+  DestFileSystemId:
+    Type: String
+    Description: Destination EFS filesystem ID (e.g., fs-0def6789abc1234ef)
+    AllowedPattern: 'fs-[0-9a-f]+'
+
+  SourceRegion:
+    Type: String
+    Description: Source region (e.g., us-east-1)
+
+  DestRegion:
+    Type: String
+    Description: Destination region (e.g., us-west-2)
+
+  DashboardName:
+    Type: String
+    Default: EFS-DR-Readiness
+    Description: Name for the CloudWatch dashboard
+
+  ResourceSuffix:
+    Type: String
+    Default: ''
+    MaxLength: 20
+    AllowedPattern: '[a-zA-Z0-9-]*'
+    Description: >
+      Must match the ResourceSuffix used when deploying template.yaml. The log widgets
+      query Lambda log groups by name, so a mismatch leaves those widgets empty.
+
+Resources:
+  EFSDRDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "# EFS DR Readiness Dashboard\nAuto-refreshes every 5 min | Replication direction shown in Replication Configuration below"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 2, "width": 24, "height": 5,
+              "properties": {
+                "title": "Replication Configuration",
+                "query": "SOURCE '/aws/lambda/dr-replication-monitor${ResourceSuffix}'\n| filter ispresent(source_fs)\n| fields source_fs, source_dns, source_ips, source_permission, source_region, dest_fs, dest_dns, dest_ips, dest_permission, dest_region, replication_status, status_message, last_sync\n| sort @timestamp desc | limit 1",
+                "region": "${SourceRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "Replication Status (2=Enabled 1=Enabling 0=Pausing -1=Paused -2=Deleting -3=Error)",
+                "metrics": [["DR/EFSMonitor", "ReplicationStatus"]],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${SourceRegion}",
+                "yAxis": {"left": {"min": -4, "max": 3}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 7, "width": 16, "height": 6,
+              "properties": {
+                "title": "Time Since Last Sync (seconds) — Native EFS Metric",
+                "metrics": [
+                  ["AWS/EFS", "TimeSinceLastSync", "FileSystemId", "${SourceFileSystemId}", "DestinationFileSystemId", "${DestFileSystemId}", {"label": "${SourceFileSystemId} → ${DestFileSystemId}"}],
+                  ["AWS/EFS", "TimeSinceLastSync", "FileSystemId", "${DestFileSystemId}", "DestinationFileSystemId", "${SourceFileSystemId}", {"label": "${DestFileSystemId} → ${SourceFileSystemId}"}]
+                ],
+                "period": 60,
+                "stat": "Maximum",
+                "region": "${SourceRegion}",
+                "annotations": {"horizontal": [{"value": 900, "label": "15 min RPO target", "color": "#d62728"}]},
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 13, "width": 12, "height": 6,
+              "properties": {
+                "title": "Data Size - Source (MB)",
+                "metrics": [
+                  ["DR/EFSMonitor", "SourceTotalSizeMB", {"label": "Source (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "SourceTotalSizeMB", {"label": "Source (${DestRegion})", "region": "${DestRegion}"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${SourceRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 13, "width": 12, "height": 6,
+              "properties": {
+                "title": "Data Size - Destination (MB)",
+                "metrics": [
+                  ["DR/EFSMonitor", "DestTotalSizeMB", {"label": "Dest (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "DestTotalSizeMB", {"label": "Dest (${DestRegion})", "region": "${DestRegion}"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${DestRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 19, "width": 6, "height": 5,
+              "properties": {
+                "title": "File Count (Source)",
+                "metrics": [
+                  ["DR/EFSMonitor", "SourceFileCount", {"label": "Source (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "SourceFileCount", {"label": "Source (${DestRegion})", "region": "${DestRegion}"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${SourceRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 6, "y": 19, "width": 6, "height": 5,
+              "properties": {
+                "title": "File Count (Dest)",
+                "metrics": [
+                  ["DR/EFSMonitor", "DestFileCount", {"label": "Dest (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "DestFileCount", {"label": "Dest (${DestRegion})", "region": "${DestRegion}"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${DestRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 19, "width": 6, "height": 5,
+              "properties": {
+                "title": "File Validation",
+                "metrics": [
+                  ["DR/EFSMonitor", "FileExistsOnDest", {"label": "File Exists (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "ChecksumMatch", {"label": "Checksum Match (${SourceRegion})", "region": "${SourceRegion}"}],
+                  ["DR/EFSMonitor", "FileExistsOnDest", {"label": "File Exists (${DestRegion})", "region": "${DestRegion}"}],
+                  ["DR/EFSMonitor", "ChecksumMatch", {"label": "Checksum Match (${DestRegion})", "region": "${DestRegion}"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${DestRegion}",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 18, "y": 19, "width": 6, "height": 5,
+              "properties": {
+                "title": "Backup Recovery Points",
+                "metrics": [
+                  ["DR/EFSMonitor", "SourceBackupCount", {"label": "Source Backups"}],
+                  ["DR/EFSMonitor", "DestBackupCount", {"label": "Dest Backups"}]
+                ],
+                "period": 300,
+                "stat": "Maximum",
+                "region": "${SourceRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 24, "width": 12, "height": 5,
+              "properties": {
+                "title": "Last Modified File (${SourceRegion})",
+                "query": "SOURCE '/aws/lambda/dr-file-monitor-source${ResourceSuffix}'\n| filter ispresent(last_modified_file)\n| fields last_modified_file, last_modified_time, file_size_bytes, checksum_sha256, total_files, total_size_bytes\n| sort @timestamp desc | limit 5",
+                "region": "${SourceRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 12, "y": 24, "width": 12, "height": 5,
+              "properties": {
+                "title": "Last Modified File (${DestRegion})",
+                "query": "SOURCE '/aws/lambda/dr-file-monitor-source${ResourceSuffix}'\n| filter ispresent(last_modified_file)\n| fields last_modified_file, last_modified_time, file_size_bytes, checksum_sha256, total_files, total_size_bytes\n| sort @timestamp desc | limit 5",
+                "region": "${DestRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 29, "width": 12, "height": 5,
+              "properties": {
+                "title": "File Validation (${SourceRegion}) — populates when this region is the replication destination",
+                "query": "SOURCE '/aws/lambda/dr-file-validator-dest${ResourceSuffix}'\n| filter ispresent(checksum_match)\n| fields file, exists, checksum_match, source_checksum, dest_checksum, total_files, total_size_bytes\n| sort @timestamp desc | limit 5",
+                "region": "${SourceRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 12, "y": 29, "width": 12, "height": 5,
+              "properties": {
+                "title": "File Validation (${DestRegion})",
+                "query": "SOURCE '/aws/lambda/dr-file-validator-dest${ResourceSuffix}'\n| filter ispresent(checksum_match)\n| fields file, exists, checksum_match, source_checksum, dest_checksum, total_files, total_size_bytes\n| sort @timestamp desc | limit 5",
+                "region": "${DestRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 34, "width": 24, "height": 4,
+              "properties": {
+                "title": "Backup Status",
+                "query": "SOURCE '/aws/lambda/dr-replication-monitor${ResourceSuffix}'\n| filter ispresent(replication_status)\n| fields coalesce(source_backups.0.id, 'No backups') as Source_Backup, coalesce(source_backups.0.created, '-') as Source_Backup_Date, coalesce(source_backups.0.status, '-') as Source_Status, coalesce(dest_backups.0.id, 'No backups') as Dest_Backup, coalesce(dest_backups.0.created, '-') as Dest_Backup_Date, coalesce(dest_backups.0.status, '-') as Dest_Status\n| sort @timestamp desc | limit 1",
+                "region": "${SourceRegion}",
+                "view": "table"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 38, "width": 24, "height": 5,
+              "properties": {
+                "title": "Write Activity — an empty graph means no writes are reaching either filesystem",
+                "metrics": [
+                  ["AWS/EFS", "DataWriteIOBytes", "FileSystemId", "${SourceFileSystemId}", {"label": "Write IO (${SourceFileSystemId})", "stat": "Sum", "color": "#d62728", "region": "${SourceRegion}"}],
+                  ["AWS/EFS", "DataWriteIOBytes", "FileSystemId", "${DestFileSystemId}", {"label": "Write IO (${DestFileSystemId})", "stat": "Sum", "color": "#ff7f0e", "region": "${DestRegion}"}]
+                ],
+                "period": 60,
+                "region": "${SourceRegion}",
+                "yAxis": {"left": {"min": 0}},
+                "view": "timeSeries"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardURL:
+    Description: Direct link to the CloudWatch dashboard
+    Value: !Sub 'https://${SourceRegion}.console.aws.amazon.com/cloudwatch/home?region=${SourceRegion}#dashboards:name=${DashboardName}'
